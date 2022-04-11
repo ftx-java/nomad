@@ -5687,15 +5687,14 @@ func TestReconciler_DisconnectedNode_Canary(t *testing.T) {
 	mockUpdateFn := allocUpdateFnMock(handled, allocUpdateFnDestructive)
 	reconciler := NewAllocReconciler(testlog.HCLogger(t), mockUpdateFn, false, job.ID, job,
 		d, allocs, tainted, "", 50, true)
-	r := reconciler.Compute()
+	result := reconciler.Compute()
 
 	// Assert the correct results
-	assertResults(t, r, &resultExpectation{
+	assertResults(t, result, &resultExpectation{
 		createDeployment:  nil,
 		deploymentUpdates: nil,
 		place:             1,
-		inplace:           0,
-		stop:              1,
+		disconnectUpdates: 1,
 		desiredTGUpdates: map[string]*structs.DesiredUpdates{
 			job.TaskGroups[0].Name: {
 				Canary: 1,
@@ -5704,6 +5703,5 @@ func TestReconciler_DisconnectedNode_Canary(t *testing.T) {
 		},
 	})
 
-	assertNamesHaveIndexes(t, intRange(1, 1), stopResultsToNames(r.stop))
-	assertNamesHaveIndexes(t, intRange(1, 1), placeResultsToNames(r.place))
+	assertNamesHaveIndexes(t, intRange(1, 1), placeResultsToNames(result.place))
 }
