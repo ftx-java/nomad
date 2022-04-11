@@ -227,7 +227,6 @@ func (a allocSet) filterByTainted(taintedNodes map[string]*structs.Node, serverS
 	supportsDisconnectedClients := serverSupportsDisconnectedClients
 
 	for _, alloc := range a {
-
 		// make sure we don't apply any reconnect logic to task groups
 		// without max_client_disconnect
 		if alloc.Job != nil {
@@ -260,10 +259,15 @@ func (a allocSet) filterByTainted(taintedNodes map[string]*structs.Node, serverS
 		}
 
 		taintedNode, nodeIsTainted := taintedNodes[alloc.NodeID]
-		if taintedNode != nil && supportsDisconnectedClients {
+		if taintedNode != nil {
 			// Group disconnecting/reconnecting
 			switch taintedNode.Status {
 			case structs.NodeStatusDisconnected:
+				// Allocs that aren't part of disconnected client support are lost
+				if !supportsDisconnectedClients {
+					lost[alloc.ID] = alloc
+					continue
+				}
 				// Filter running allocs on a node that is disconnected to be marked as unknown.
 				if alloc.DesiredStatus == structs.AllocDesiredStatusRun &&
 					alloc.ClientStatus == structs.AllocClientStatusRunning {
@@ -276,7 +280,7 @@ func (a allocSet) filterByTainted(taintedNodes map[string]*structs.Node, serverS
 					continue
 				}
 			case structs.NodeStatusReady:
-				// Filter reconnecting allocs with replacements on a node that is now connected.
+				// Filter reconnecting allocs on a node that is now connected.
 				if reconnected {
 					if expired {
 						lost[alloc.ID] = alloc
