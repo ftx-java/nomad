@@ -1275,8 +1275,6 @@ func (a *allocReconciler) createTimeoutLaterEvals(disconnecting allocSet, tgName
 		return map[string]string{}
 	}
 
-	a.logger.Trace("createTimeoutLaterEvals", "disconnecting", len(disconnecting))
-
 	timeoutDelays, err := disconnecting.delayByMaxClientDisconnect(a.now)
 	if err != nil || len(timeoutDelays) != len(disconnecting) {
 		a.logger.Error("error computing disconnecting timeouts for task_group", "task_group", tgName, "err", err)
@@ -1357,7 +1355,6 @@ func (a *allocReconciler) appendFollowupEvals(tgName string, evals []*structs.Ev
 		evals = append(existingFollowUpEvals, evals...)
 	}
 
-	a.logger.Trace("appendFollowUpEvals", "follow_up_evals", len(evals))
 	a.result.desiredFollowupEvals[tgName] = evals
 }
 
