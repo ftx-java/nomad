@@ -5631,3 +5631,79 @@ func TestReconciler_Disconnected_Client(t *testing.T) {
 		})
 	}
 }
+
+// Tests the reconciler handles migrating a canary correctly on a disconnected node
+func TestReconciler_DisconnectedNode_Canary(t *testing.T) {
+	ci.Parallel(t)
+
+	job := mock.Job()
+	job.TaskGroups[0].Update = canaryUpdate
+
+	// Create a deployment that is paused and has placed some canaries
+	d := structs.NewDeployment(job, 50)
+	s := &structs.DeploymentState{
+		Promoted:        false,
+		DesiredTotal:    10,
+		DesiredCanaries: 2,
+		PlacedAllocs:    2,
+	}
+	d.TaskGroups[job.TaskGroups[0].Name] = s
+
+	// Create 10 allocations from the old job
+	var allocs []*structs.Allocation
+	for i := 0; i < 10; i++ {
+		alloc := mock.Alloc()
+		alloc.Job = job
+		alloc.JobID = job.ID
+		alloc.NodeID = uuid.Generate()
+		alloc.Name = structs.AllocName(job.ID, job.TaskGroups[0].Name, uint(i))
+		alloc.TaskGroup = job.TaskGroups[0].Name
+		allocs = append(allocs, alloc)
+	}
+
+	// Create two canaries for the new job
+	handled := make(map[string]allocUpdateType)
+	for i := 0; i < 2; i++ {
+		// Create one canary
+		canary := mock.Alloc()
+		canary.Job = job
+		canary.JobID = job.ID
+		canary.NodeID = uuid.Generate()
+		canary.Name = structs.AllocName(job.ID, job.TaskGroups[0].Name, uint(i))
+		canary.TaskGroup = job.TaskGroups[0].Name
+		s.PlacedCanaries = append(s.PlacedCanaries, canary.ID)
+		canary.DeploymentID = d.ID
+		allocs = append(allocs, canary)
+		handled[canary.ID] = allocUpdateFnIgnore
+	}
+
+	// Build a map of tainted nodes that contains the last canary
+	tainted := make(map[string]*structs.Node, 1)
+	n := mock.Node()
+	n.ID = allocs[11].NodeID
+	n.Status = structs.NodeStatusDisconnected
+	tainted[n.ID] = n
+
+	mockUpdateFn := allocUpdateFnMock(handled, allocUpdateFnDestructive)
+	reconciler := NewAllocReconciler(testlog.HCLogger(t), mockUpdateFn, false, job.ID, job,
+		d, allocs, tainted, "", 50, true)
+	r := reconciler.Compute()
+
+	// Assert the correct results
+	assertResults(t, r, &resultExpectation{
+		createDeployment:  nil,
+		deploymentUpdates: nil,
+		place:             1,
+		inplace:           0,
+		stop:              1,
+		desiredTGUpdates: map[string]*structs.DesiredUpdates{
+			job.TaskGroups[0].Name: {
+				Canary: 1,
+				Ignore: 11,
+			},
+		},
+	})
+
+	assertNamesHaveIndexes(t, intRange(1, 1), stopResultsToNames(r.stop))
+	assertNamesHaveIndexes(t, intRange(1, 1), placeResultsToNames(r.place))
+}

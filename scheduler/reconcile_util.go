@@ -259,6 +259,36 @@ func (a allocSet) filterByTainted(taintedNodes map[string]*structs.Node, serverS
 			continue
 		}
 
+		taintedNode, nodeIsTainted := taintedNodes[alloc.NodeID]
+		if taintedNode != nil && supportsDisconnectedClients {
+			// Group disconnecting/reconnecting
+			switch taintedNode.Status {
+			case structs.NodeStatusDisconnected:
+				// Filter running allocs on a node that is disconnected to be marked as unknown.
+				if alloc.DesiredStatus == structs.AllocDesiredStatusRun &&
+					alloc.ClientStatus == structs.AllocClientStatusRunning {
+					disconnecting[alloc.ID] = alloc
+					continue
+				}
+				// Filter pending allocs on a node that is disconnected to be marked as lost.
+				if alloc.ClientStatus == structs.AllocClientStatusPending {
+					lost[alloc.ID] = alloc
+					continue
+				}
+			case structs.NodeStatusReady:
+				// Filter reconnecting allocs with replacements on a node that is now connected.
+				if reconnected {
+					if expired {
+						lost[alloc.ID] = alloc
+						continue
+					}
+					reconnecting[alloc.ID] = alloc
+					continue
+				}
+			default:
+			}
+		}
+
 		// Terminal allocs, if not reconnected, are always untainted as they
 		// should never be migrated.
 		if alloc.TerminalStatus() && !reconnected {
@@ -295,8 +325,7 @@ func (a allocSet) filterByTainted(taintedNodes map[string]*structs.Node, serverS
 			continue
 		}
 
-		taintedNode, ok := taintedNodes[alloc.NodeID]
-		if !ok {
+		if !nodeIsTainted {
 			// Filter allocs on a node that is now re-connected to be resumed.
 			if reconnected {
 				if expired {
@@ -312,39 +341,6 @@ func (a allocSet) filterByTainted(taintedNodes map[string]*structs.Node, serverS
 			continue
 		}
 
-		if taintedNode != nil {
-			// Group disconnecting/reconnecting
-			switch taintedNode.Status {
-			case structs.NodeStatusDisconnected:
-				if supportsDisconnectedClients {
-					// Filter running allocs on a node that is disconnected to be marked as unknown.
-					if alloc.ClientStatus == structs.AllocClientStatusRunning {
-						disconnecting[alloc.ID] = alloc
-						continue
-					}
-					// Filter pending allocs on a node that is disconnected to be marked as lost.
-					if alloc.ClientStatus == structs.AllocClientStatusPending {
-						lost[alloc.ID] = alloc
-						continue
-					}
-				} else {
-					lost[alloc.ID] = alloc
-					continue
-				}
-			case structs.NodeStatusReady:
-				// Filter reconnecting allocs with replacements on a node that is now connected.
-				if reconnected {
-					if expired {
-						lost[alloc.ID] = alloc
-						continue
-					}
-					reconnecting[alloc.ID] = alloc
-					continue
-				}
-			default:
-			}
-		}
-
 		// Allocs on GC'd (nil) or lost nodes are Lost
 		if taintedNode == nil || taintedNode.TerminalStatus() {
 			lost[alloc.ID] = alloc
@@ -355,6 +351,57 @@ func (a allocSet) filterByTainted(taintedNodes map[string]*structs.Node, serverS
 		untainted[alloc.ID] = alloc
 	}
 
+	return
+}
+
+// filterCanaries filters allocs that are part of a canary set so that they can be
+// cancelled if not needed or on a node that has disconnected.
+func (a allocSet) filterCanaries(nodes map[string]*structs.Node, supportDisconnectedClients bool) (untainted, migrate, lost, disconnecting allocSet) {
+	untainted = make(map[string]*structs.Allocation)
+	migrate = make(map[string]*structs.Allocation)
+	lost = make(map[string]*structs.Allocation)
+	disconnecting = make(map[string]*structs.Allocation)
+	for _, alloc := range a {
+		node, nodeIsTainted := nodes[alloc.NodeID]
+
+		// Canaries on disconnected nodes are disconnecting so that they can be
+		// marked stop and unknown.
+		if supportDisconnectedClients &&
+			nodeIsTainted &&
+			node.Status == structs.NodeStatusDisconnected &&
+			(alloc.ClientStatus == structs.AllocClientStatusPending || alloc.ClientStatus == structs.AllocClientStatusRunning) &&
+			alloc.DesiredStatus == structs.AllocDesiredStatusRun {
+			disconnecting[alloc.ID] = alloc
+			continue
+		}
+
+		// Terminal allocs are always untainted as they should never be migrated
+		if alloc.TerminalStatus() {
+			untainted[alloc.ID] = alloc
+			continue
+		}
+
+		// Non-terminal allocs that should migrate should always migrate
+		if alloc.DesiredTransition.ShouldMigrate() {
+			migrate[alloc.ID] = alloc
+			continue
+		}
+
+		if !nodeIsTainted {
+			// Node is untainted so alloc is untainted
+			untainted[alloc.ID] = alloc
+			continue
+		}
+
+		// Canaries on GC'd (nil) or lost nodes are Lost
+		if node == nil || node.TerminalStatus() {
+			lost[alloc.ID] = alloc
+			continue
+		}
+
+		// All other allocs are untainted
+		untainted[alloc.ID] = alloc
+	}
 	return
 }
 
@@ -369,6 +416,12 @@ func (a allocSet) filterByRescheduleable(isBatch, isDisconnecting bool, now time
 	// When filtering disconnected sets, the untainted set is never populated.
 	// It has no purpose in that context.
 	for _, alloc := range a {
+		// Ignore disconnecting allocs that are already unknown. This can happen
+		// in the case of canaries that are interrupted by a disconnect.
+		if isDisconnecting && alloc.ClientStatus == structs.AllocClientStatusUnknown {
+			continue
+		}
+
 		var eligibleNow, eligibleLater bool
 		var rescheduleTime time.Time
 
