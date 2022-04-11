@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/nomad/nomad/structs"
 )
 
@@ -358,6 +359,36 @@ func (a allocSet) filterByTainted(taintedNodes map[string]*structs.Node, serverS
 	return
 }
 
+func (a allocSet) log(msg string, logger hclog.Logger, nodes map[string]*structs.Node) {
+	for _, alloc := range a {
+		logAlloc(alloc, msg, logger, nodes)
+	}
+}
+
+func logAlloc(alloc *structs.Allocation, msg string, logger hclog.Logger, nodes map[string]*structs.Node) {
+	node, exists := nodes[alloc.NodeID]
+	nodeStatus := "???"
+	if exists {
+		if node == nil {
+			nodeStatus = "nil"
+		} else {
+			nodeStatus = node.Status
+		}
+	}
+	logger.Trace("allocSet.log "+msg,
+		"node_exits", exists,
+		"node_status", nodeStatus,
+		"node_name", alloc.NodeName,
+		"alloc_id", alloc.ID,
+		"alloc_modify_index", alloc.AllocModifyIndex,
+		"client_status", alloc.ClientStatus,
+		"desired_status", alloc.DesiredStatus,
+		"should_migrate", alloc.DesiredTransition.ShouldMigrate(),
+		"should_reschedule", alloc.DesiredTransition.ShouldReschedule(),
+		"ignore_shutdown_delay", alloc.DesiredTransition.ShouldIgnoreShutdownDelay(),
+		"force_reschedule", alloc.DesiredTransition.ShouldForceReschedule())
+}
+
 // filterCanaries filters allocs that are part of a canary set so that they can be
 // cancelled if not needed or on a node that has disconnected.
 func (a allocSet) filterCanaries(nodes map[string]*structs.Node, supportDisconnectedClients bool) (untainted, migrate, lost, disconnecting allocSet) {
@@ -375,6 +406,7 @@ func (a allocSet) filterCanaries(nodes map[string]*structs.Node, supportDisconne
 			node.Status == structs.NodeStatusDisconnected &&
 			(alloc.ClientStatus == structs.AllocClientStatusPending || alloc.ClientStatus == structs.AllocClientStatusRunning) &&
 			alloc.DesiredStatus == structs.AllocDesiredStatusRun {
+			fmt.Println("filterCanaries found alloc: " + alloc.ID)
 			disconnecting[alloc.ID] = alloc
 			continue
 		}

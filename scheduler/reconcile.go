@@ -409,7 +409,9 @@ func (a *allocReconciler) computeGroup(groupName string, all allocSet) bool {
 	// Determine what set of allocations are on tainted nodes
 	untainted, migrate, lost, disconnecting, reconnecting, ignore := all.filterByTainted(a.taintedNodes, a.supportsDisconnectedClients, a.now)
 	desiredChanges.Ignore += uint64(len(ignore))
-	disconnecting = disconnecting.difference(disconnectingCanaries)
+	disconnectingCanaries.log("disconnecting_canaries", a.logger, a.taintedNodes)
+	disconnecting = disconnectingCanaries.difference(disconnecting)
+	disconnecting.log("disconnecting_diff", a.logger, a.taintedNodes)
 
 	// Determine what set of terminal allocations need to be rescheduled
 	untainted, rescheduleNow, rescheduleLater := untainted.filterByRescheduleable(a.batch, false, a.now, a.evalID, a.deployment)
@@ -417,6 +419,7 @@ func (a *allocReconciler) computeGroup(groupName string, all allocSet) bool {
 	// Determine what set of disconnecting allocations need to be rescheduled
 	_, rescheduleDisconnecting, _ := disconnecting.filterByRescheduleable(a.batch, true, a.now, a.evalID, a.deployment)
 	rescheduleNow = rescheduleNow.union(rescheduleDisconnecting)
+	rescheduleDisconnecting.log("disconnecting_reschedule", a.logger, a.taintedNodes)
 
 	// Find delays for any lost allocs that have stop_after_client_disconnect
 	lostLater := lost.delayByStopAfterClientDisconnect()
@@ -620,14 +623,19 @@ func (a *allocReconciler) cancelUnneededCanaries(original allocSet, desiredChang
 		}
 
 		canaries = all.fromKeys(canaryIDs)
-		var untainted, migrate, lost allocSet
-		untainted, migrate, lost, disconnecting = canaries.filterCanaries(a.taintedNodes, a.supportsDisconnectedClients)
+		canaries.log("cancel_canaries", a.logger, a.taintedNodes)
+		untainted, migrate, lost, disconnectingCanaries := canaries.filterCanaries(a.taintedNodes, a.supportsDisconnectedClients)
 
 		a.markStop(migrate, "", allocMigrating)
 		a.markStop(lost, structs.AllocClientStatusLost, allocLost)
 
+		migrate.log("migrate_canaries", a.logger, a.taintedNodes)
+		lost.log("lost_canaries", a.logger, a.taintedNodes)
+
 		// Disconnecting canaries need to be marked stop and unknown.
+		disconnecting = disconnectingCanaries
 		for _, alloc := range disconnecting {
+			logAlloc(alloc, "disconnecting_canaries", a.logger, a.taintedNodes)
 			alloc.ClientStatus = structs.AllocClientStatusUnknown
 			alloc.ClientDescription = allocUnknown
 			alloc.DesiredStatus = structs.AllocDesiredStatusStop
@@ -1308,6 +1316,12 @@ func (a *allocReconciler) createTimeoutLaterEvals(disconnecting allocSet, tgName
 	// get farther into the future. If this loop detects the next delay is greater
 	// than the batch window (5s) it creates another batch.
 	for _, timeoutInfo := range timeoutDelays {
+		// If this is a disconnecting canary, its already been placed in the result
+		// by cancelUnneededCanaries. Skip it here, since it's client status has
+		// already been mutated. However, we still need the eval.
+		if _, exists := a.result.disconnectUpdates[timeoutInfo.alloc.ID]; exists {
+			continue
+		}
 		if timeoutInfo.rescheduleTime.Sub(nextReschedTime) < batchedFailedAllocWindowSize {
 			allocIDToFollowupEvalID[timeoutInfo.allocID] = eval.ID
 		} else {
