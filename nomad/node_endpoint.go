@@ -487,7 +487,10 @@ func (n *Node) UpdateStatus(args *structs.NodeUpdateStatusRequest, reply *struct
 
 	// Check if we should trigger evaluations
 	transitionToReady := transitionedToReady(args.Status, node.Status)
-	if structs.ShouldDrainNode(args.Status) || transitionToReady || args.Status == structs.NodeStatusDisconnected {
+	if structs.ShouldDrainNode(args.Status) ||
+		transitionToReady ||
+		// Don't create evals if heartbeat is just resetting the timer.
+		(args.Status == structs.NodeStatusDisconnected && node.Status != structs.NodeStatusDisconnected) {
 		evalIDs, evalIndex, err := n.createNodeEvals(args.NodeID, index)
 		if err != nil {
 			n.logger.Error("eval creation failed", "error", err)
@@ -545,9 +548,6 @@ func (n *Node) UpdateStatus(args *structs.NodeUpdateStatusRequest, reply *struct
 				return err
 			}
 		}
-
-	case structs.NodeStatusDisconnected:
-		n.logger.Trace(fmt.Sprintf("heartbeat reset skipped for disconnected node %q", args.NodeID))
 
 	default:
 		ttl, err := n.srv.resetHeartbeatTimer(args.NodeID)
