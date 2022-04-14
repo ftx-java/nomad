@@ -34,6 +34,7 @@ func Node() *structs.Node {
 			"nomad.version":      "0.5.0",
 			"driver.exec":        "1",
 			"driver.mock_driver": "1",
+			"consul.version":     "1.11.4",
 		},
 
 		// TODO Remove once clientv2 gets merged
