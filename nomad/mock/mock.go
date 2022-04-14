@@ -252,6 +252,13 @@ func Job() *structs.Job {
 			{
 				Name:  "web",
 				Count: 10,
+				Constraints: []*structs.Constraint{
+					{
+						LTarget: "${attr.consul.version}",
+						RTarget: ">= 1.7.0",
+						Operand: structs.ConstraintSemver,
+					},
+				},
 				EphemeralDisk: &structs.EphemeralDisk{
 					SizeMB: 150,
 				},
